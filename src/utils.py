@@ -12,11 +12,15 @@ from pathlib import Path
 import subprocess
 import torch
 import torch.distributed as dist
-from torch._six import inf
+from torch import inf
 import random
 
 from tensorboardX import SummaryWriter
 
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
@@ -247,21 +251,26 @@ def save_on_master(*args, **kwargs):
 
 
 def init_distributed_mode(args):
+    args.rank = int(os.environ.get("RANK", 0))
+    args.gpu = int(os.environ.get("LOCAL_RANK", 0))
+    args.world_size = int(os.environ.get("WORLD_SIZE", 1))
+
     if args.dist_on_itp:
-        args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
-        args.world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
-        args.gpu = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+        # args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
+        # args.world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
+        # args.gpu = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
         args.dist_url = "tcp://%s:%s" % (os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
         os.environ['LOCAL_RANK'] = str(args.gpu)
         os.environ['RANK'] = str(args.rank)
         os.environ['WORLD_SIZE'] = str(args.world_size)
     elif 'SLURM_PROCID' in os.environ:
-        args.rank = int(os.environ['SLURM_PROCID'])
-        args.gpu = int(os.environ['SLURM_LOCALID'])
-        args.world_size = int(os.environ['SLURM_NTASKS'])
-        os.environ['RANK'] = str(args.rank)
-        os.environ['LOCAL_RANK'] = str(args.gpu)
-        os.environ['WORLD_SIZE'] = str(args.world_size)
+        # args.rank = int(os.environ['SLURM_PROCID'])
+        # args.gpu = int(os.environ['SLURM_LOCALID'])
+        # args.world_size = int(os.environ['SLURM_NTASKS'])
+
+        # os.environ['RANK'] = str(args.rank)
+        # os.environ['LOCAL_RANK'] = str(args.gpu)
+        # os.environ['WORLD_SIZE'] = str(args.world_size)
 
         node_list = os.environ['SLURM_NODELIST']
         addr = subprocess.getoutput(
@@ -269,9 +278,10 @@ def init_distributed_mode(args):
         if 'MASTER_ADDR' not in os.environ:
             os.environ['MASTER_ADDR'] = addr
     elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        args.rank = int(os.environ["RANK"])
-        args.world_size = int(os.environ['WORLD_SIZE'])
-        args.gpu = int(os.environ['LOCAL_RANK'])
+        # args.rank = int(os.environ["RANK"])
+        # args.world_size = int(os.environ['WORLD_SIZE'])
+        # args.gpu = int(os.environ['LOCAL_RANK'])
+        pass
     else:
         print('Not using distributed mode')
         args.distributed = False
@@ -283,6 +293,7 @@ def init_distributed_mode(args):
     args.dist_backend = 'nccl'
     print('| distributed init (rank {}): {}, gpu {}'.format(
         args.rank, args.dist_url, args.gpu), flush=True)
+    print(args.dist_backend, args.dist_url, args.world_size, args.rank)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()

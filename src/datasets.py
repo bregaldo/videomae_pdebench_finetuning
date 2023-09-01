@@ -1,10 +1,164 @@
 import os
 from torchvision import transforms
+from torch.utils.data import Dataset
 from transforms import *
-from masking_generator import TubeMaskingGenerator
+from masking_generator import TubeMaskingGenerator, LastFrameMaskingGenerator
 from kinetics import VideoClsDataset, VideoMAE
 from ssv2 import SSVideoClsDataset
+import h5py
+import shutil
+import utils
+import time
 
+
+class CustomNormalize(torch.nn.Module):
+    def __init__(self, minv, maxv, dim_from_the_end=3, eps=1e-5):
+        super().__init__()
+        self.min = torch.Tensor(minv).float()
+        self.max = torch.Tensor(maxv).float()
+        self.dim_from_the_end = dim_from_the_end
+        self.min = torch.reshape(self.min, (-1,) + (1,) * self.dim_from_the_end)
+        self.max = torch.reshape(self.max, (-1,) + (1,) * self.dim_from_the_end)
+        self.eps = eps
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return (tensor - self.min) / ((self.max - self.min) + self.eps)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(min={self.min}, max={self.max})"
+
+class DataAugmentationForPDEBench(object):
+    def __init__(self, args):
+        if args.data_set == 'compNS_turb':
+            self.input_min = [-4.0, -4.0, 0.8]
+            self.input_max = [4.0, 4.0, 1.2]
+        elif args.data_set == 'compNS_rand':
+            self.input_min = [-1.2, -1.2, 0.0]
+            self.input_max = [1.2, 1.2, 20.0]
+        else:
+            raise ValueError('Dataset name not recognized.')
+        normalize = CustomNormalize(self.input_min, self.input_max)
+        crop = transforms.CenterCrop(args.input_size)
+        self.transform = transforms.Compose([crop, normalize])
+        if args.mask_type == 'tube':
+            self.masked_position_generator = TubeMaskingGenerator(
+                args.window_size, args.mask_ratio
+            )
+        elif args.mask_type == 'last_frame':
+            self.masked_position_generator = LastFrameMaskingGenerator(args.window_size)
+
+    def __call__(self, images):
+        process_data = self.transform(images)
+        return process_data, self.masked_position_generator()
+
+    def __repr__(self):
+        repr = "(DataAugmentationForVideoMAE,\n"
+        repr += "  transform = %s,\n" % str(self.transform)
+        repr += "  Masked position generator = %s,\n" % str(self.masked_position_generator)
+        repr += ")"
+        return repr
+
+class PDEBenchDataset(Dataset):
+    def __init__(self, data_set,
+                 transform=None,
+                 fields=['Vx', 'Vy', 'density'],
+                 timesteps=16,
+                 random_start=True,
+                 set_type='train',
+                 split_ratios=(0.8, 0.1, 0.1),
+                 split_seed=42,
+                 data_tmp_copy=False,
+                 local_rank=None):
+        self.dataset_name = data_set
+        self.timesteps = timesteps
+        self.fields = fields # Possible choices are: 'Vx', 'Vy', 'density', 'pressure'
+        assert len(self.fields) > 0, "At least one field must be specified."
+
+        self.random_start = random_start
+
+        self.shape = None
+        self.num_samples = None
+        self.num_timesteps = None
+        self.sample_shape = None
+
+        self.transform = transform
+
+        self.data_tmp_copy = data_tmp_copy
+        self.local_rank = local_rank
+
+        self.set_type = set_type
+        self.split_ratios = split_ratios
+        assert len(split_ratios) == 3, "Split ratios must be a tuple of length 3."
+        assert sum(split_ratios) == 1.0, "Split ratios must sum to 1.0."
+        self.split_seed = split_seed
+
+        self.load_dataset()
+
+    def load_dataset(self):
+        data_base_path = "/mnt/home/gkrawezik/ceph/AI_DATASETS/PDEBench/2D/CFD/"
+        data_rand_path = os.path.join(data_base_path, "2D_Train_Rand")
+        data_turb_path = os.path.join(data_base_path, "2D_Train_Turb")
+        data_rand_filename = '2D_CFD_Rand_M0.1_Eta0.1_Zeta0.1_periodic_128_Train.hdf5'
+        data_turb_filename = '2D_CFD_Turb_M0.1_Eta1e-08_Zeta1e-08_periodic_512_Train.hdf5'
+
+        if self.dataset_name == 'compNS_turb':
+            filename = os.path.join(data_turb_path, data_turb_filename)
+            
+        elif self.dataset_name == 'compNS_rand':
+            filename = os.path.join(data_rand_path, data_rand_filename)
+        else:
+            raise ValueError('Dataset name not recognized.')
+        if self.data_tmp_copy:
+            if self.local_rank == 0:
+                stime = time.time()
+                print("Copying target file to /scratch...")
+                shutil.copy(filename, '/scratch/')
+                print("Done in %.2f seconds." % (time.time() - stime))
+            elif self.local_rank is None:
+                raise ValueError("local_rank must be specified if data_tmp_copy is True.")
+            torch.distributed.barrier()
+            self.file = h5py.File(os.path.join('/scratch/', filename.split('/')[-1]), 'r')
+        else:
+            self.file = h5py.File(filename, 'r')
+
+        for field in self.fields:
+            assert field in self.file.keys(), "Field %s not found in dataset." % field
+        self.shape = self.file[self.fields[0]].shape
+        for field in self.fields:
+            assert self.file[field].shape == self.shape, "Fields must have same shape."
+        
+        self.num_samples = self.shape[0]
+        self.num_timesteps = self.shape[1]
+        self.sample_shape = self.shape[2:]
+
+        assert self.num_timesteps >= self.timesteps, "Dataset has fewer timesteps than specified timesteps."
+
+        print("Raw dataset %s has %d samples of shape %s and %d timesteps." % (self.dataset_name, self.num_samples, str(self.sample_shape), self.num_timesteps))
+
+        # Split dataset according to split_ratios
+        self.split_indices = {}
+        indices = np.arange(self.num_samples)
+        rng = np.random.default_rng(seed=self.split_seed)
+        rng.shuffle(indices)
+        self.split_indices['train'] = indices[:int(self.num_samples*self.split_ratios[0])]
+        self.split_indices['val'] = indices[int(self.num_samples*self.split_ratios[0]):int(self.num_samples*(self.split_ratios[0]+self.split_ratios[1]))]
+        self.split_indices['test'] = indices[int(self.num_samples*(self.split_ratios[0]+self.split_ratios[1])):]
+    
+    def __len__(self):
+        return len(self.split_indices[self.set_type])
+    
+    def __getitem__(self, idx):
+        sample_idx = self.split_indices[self.set_type][idx]
+        if self.random_start:
+            start_idx = np.random.randint(0, self.num_timesteps-self.timesteps+1)
+        else:
+            start_idx = 0
+        end_idx = start_idx + self.timesteps
+        sample = torch.zeros((len(self.fields), self.timesteps, *self.sample_shape))
+        for i, field in enumerate(self.fields):
+            sample[i] = torch.tensor(self.file[field][sample_idx, start_idx:end_idx])
+        processed_sample, mask = self.transform(sample)
+        return processed_sample, mask
 
 class DataAugmentationForVideoMAE(object):
     def __init__(self, args):
@@ -34,6 +188,16 @@ class DataAugmentationForVideoMAE(object):
         repr += ")"
         return repr
 
+
+def build_pdebench_dataset(args, set_type='train'):
+    transform = DataAugmentationForPDEBench(args)
+    dataset = PDEBenchDataset(args.data_set,
+                              set_type=set_type,
+                              timesteps=args.num_frames,
+                              transform=transform,
+                              data_tmp_copy=args.data_tmp_copy,
+                              local_rank=args.gpu)
+    return dataset
 
 def build_pretraining_dataset(args):
     transform = DataAugmentationForVideoMAE(args)
