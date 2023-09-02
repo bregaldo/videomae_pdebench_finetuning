@@ -37,7 +37,7 @@ data_tmp_copy=False # Set to True if you want to first copy the dataset to /tmp
 
 # Model
 model_size=small # Among: small, base
-checkpoint=k400_vit-s # Typically among: k400_vit-s, k400_vit-b, ss2_vit-s, ss2_vit-b
+checkpoint=k400_vit-s # Typically among: k400_vit-s, k400_vit-b, ssv2_vit-s, ssv2_vit-b
 model=pretrain_videomae_${model_size}_patch16_${input_size} # Must be consistent with checkpoint
 
 # Masking

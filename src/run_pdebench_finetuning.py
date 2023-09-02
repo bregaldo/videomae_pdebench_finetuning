@@ -4,6 +4,7 @@ import numpy as np
 import time
 import torch
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
 import json
 import os
 from pathlib import Path
@@ -61,6 +62,7 @@ def get_args(interactive=False):
     parser.add_argument('--wb_project', default='videomae_finetunint', type=str)
     parser.add_argument('--wb_group', default=None, type=str)
     parser.add_argument('--wb_name', default=None, type=str)
+    parser.add_argument('--wb_sweep_id', default=None, type=str)
 
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -140,6 +142,9 @@ def get_args(interactive=False):
     else:
         args = parser.parse_args()
 
+    if args.wb_sweep_id is None:
+        args.wb_sweep_id = ''
+
     return args
 
 
@@ -170,19 +175,46 @@ def get_model(args):
     return model
 
 def main(args):
-    utils.init_distributed_mode(args)
-    print("Distributed mode initialized")
+    # Wandb initialization
+    if len(args.wb_sweep_id) > 0: # if we are running a sweep
+        wandb.init(group=args.wb_group,
+                   job_type='finetuning',
+                   mode=None if args.rank == 0  else "disabled")
+        
+        # We broadcast the sweep config to all processes
+        config_updates_list = [None]
+        if args.rank == 0:
+            config_updates = []
+            for key, value in wandb.config.items():
+                config_updates.append((key, value))
+            config_updates_list[0] = config_updates
+        dist.broadcast_object_list(config_updates_list, src=0)
+        dist.barrier()
 
-    if args.rank == 0:
-        print(args)
-    wandb.init(project=args.wb_project,
-               group=args.wb_group,
-               job_type='finetuning',
-               name=args.wb_name,
-               config=args,
-               mode=None if args.rank == 0  else "disabled")
+        # We update the args with the sweep config
+        for key, value in config_updates_list[0]:
+            print(f"Updating {key} to {value}")
+            setattr(args, key, value)
+
+        # We update the wandb run name
+        run_name = args.wb_name \
+                 + f'_lr_{args.lr:.6f}'
+        wandb.run.name = run_name
+        if args.output_dir:
+            args.output_dir = os.path.join(args.output_dir, run_name)
+            Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    else:
+        wandb.init(project=args.wb_project,
+                   group=args.wb_group,
+                   job_type='finetuning',
+                   entity='flatiron-scipt',
+                   name=args.wb_name,
+                   config=args,
+                   mode=None if args.rank == 0  else "disabled")
 
     device = torch.device(args.device)
+
+    print(args)
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -334,7 +366,25 @@ def main(args):
 
 
 if __name__ == '__main__':
-    opts = get_args()
-    if opts.output_dir:
-        Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
-    main(opts)
+    args = get_args()
+
+    # Initialize distributed training
+    utils.init_distributed_mode(args)
+    print("Distributed mode initialized")
+
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    if len(args.wb_sweep_id) > 0:
+        if args.output_dir:
+            args.output_dir = os.path.join(args.output_dir, args.wb_sweep_id)
+            Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        if args.rank == 0:
+            wandb.agent(args.wb_sweep_id,
+                        function=lambda: main(args),
+                        entity='flatiron-scipt',
+                        project=args.wb_project)
+        else:
+            main(args)
+    else:
+        main(args)

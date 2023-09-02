@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ft_test
+#SBATCH --job-name=ft_k400_s_turb_224_38
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
@@ -8,7 +8,7 @@
 #SBATCH --mem=256G
 #SBATCH --partition=gpu
 #SBATCH --constraint=h100
-#SBATCH -o ft_test.log
+#SBATCH -o jobs/finetune_38.log
 
 module --force purge
 source ~/.bashrc
@@ -21,7 +21,7 @@ pysource videomae
 # Wandb
 wb_project=videomae_finetuning
 wb_group=Calibration
-wb_name=test
+wb_name=k400_s_turb_224_sweeps
 
 # Directories
 BASE_DIR=/mnt/home/bregaldosaintblancard/Projects/Foundation\ Models/VideoMAE_comparison
@@ -48,7 +48,7 @@ mask_ratio=0.9 # Only applicable for tube masking
 norm_target_mode=last_frame
 
 # Optimization
-epoch=100
+epoch=50
 warmup_epochs=5
 batch_size=4 # Batch size per GPU
 num_workers=4
@@ -59,7 +59,7 @@ beta2=0.999
 weight_decay=0.05
 
 # Saving
-save_ckpt_freq=50
+save_ckpt_freq=25
 
 export OMP_NUM_THREADS=1
 
@@ -82,6 +82,7 @@ srun python `which torchrun` \
         --wb_project $wb_project \
         --wb_group $wb_group \
         --wb_name $wb_name \
+        --wb_sweep_id 7v4j0yxz \
         --data_set $data_set \
         --fields $fields \
         --input_size $input_size \

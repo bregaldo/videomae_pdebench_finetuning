@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=ft_test
+#SBATCH --job-name=ft_k400_s_turb_512_test
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
+#SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=02:00:00
 #SBATCH --mem=256G
 #SBATCH --partition=gpu
 #SBATCH --constraint=h100
-#SBATCH -o ft_test.log
+#SBATCH -o ft_k400_s_turb_512_test.log
 
 module --force purge
 source ~/.bashrc
@@ -21,7 +21,7 @@ pysource videomae
 # Wandb
 wb_project=videomae_finetuning
 wb_group=Calibration
-wb_name=test
+wb_name=k400_s_turb_512_test
 
 # Directories
 BASE_DIR=/mnt/home/bregaldosaintblancard/Projects/Foundation\ Models/VideoMAE_comparison
@@ -30,7 +30,7 @@ OUTPUT_DIR="$BASE_DIR/ceph/pdebench_finetuning/k400_s/$wb_name/"
 # Data
 data_set=compNS_turb # Among: compNS_turb, compNS_rand
 fields=Vx,Vy,density
-input_size=224
+input_size=512
 num_frames=16
 sampling_rate=1
 data_tmp_copy=False # Set to True if you want to first copy the dataset to /tmp
@@ -50,7 +50,7 @@ norm_target_mode=last_frame
 # Optimization
 epoch=100
 warmup_epochs=5
-batch_size=4 # Batch size per GPU
+batch_size=2 # Batch size per GPU
 num_workers=4
 opt=adamw
 lr=1e-3 # Base learning rate, effective one is determined through: lr * total_batch_size / 256
@@ -59,7 +59,7 @@ beta2=0.999
 weight_decay=0.05
 
 # Saving
-save_ckpt_freq=50
+save_ckpt_freq=25
 
 export OMP_NUM_THREADS=1
 

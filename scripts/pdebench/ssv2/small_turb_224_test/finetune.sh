@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ft_test
+#SBATCH --job-name=ft_ssv2_s_turb_224_test
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
@@ -8,7 +8,7 @@
 #SBATCH --mem=256G
 #SBATCH --partition=gpu
 #SBATCH --constraint=h100
-#SBATCH -o ft_test.log
+#SBATCH -o ft_ssv2_s_turb_224_test.log
 
 module --force purge
 source ~/.bashrc
@@ -21,11 +21,11 @@ pysource videomae
 # Wandb
 wb_project=videomae_finetuning
 wb_group=Calibration
-wb_name=test
+wb_name=ssv2_s_turb_224_test
 
 # Directories
 BASE_DIR=/mnt/home/bregaldosaintblancard/Projects/Foundation\ Models/VideoMAE_comparison
-OUTPUT_DIR="$BASE_DIR/ceph/pdebench_finetuning/k400_s/$wb_name/"
+OUTPUT_DIR="$BASE_DIR/ceph/pdebench_finetuning/ssv2_s/$wb_name/"
 
 # Data
 data_set=compNS_turb # Among: compNS_turb, compNS_rand
@@ -37,7 +37,7 @@ data_tmp_copy=False # Set to True if you want to first copy the dataset to /tmp
 
 # Model
 model_size=small # Among: small, base
-checkpoint=k400_vit-s # Typically among: k400_vit-s, k400_vit-b, ssv2_vit-s, ssv2_vit-b
+checkpoint=ssv2_vit-s # Typically among: k400_vit-s, k400_vit-b, ssv2_vit-s, ssv2_vit-b
 model=pretrain_videomae_${model_size}_patch16_${input_size} # Must be consistent with checkpoint
 
 # Masking
@@ -59,7 +59,7 @@ beta2=0.999
 weight_decay=0.05
 
 # Saving
-save_ckpt_freq=50
+save_ckpt_freq=25
 
 export OMP_NUM_THREADS=1
 
