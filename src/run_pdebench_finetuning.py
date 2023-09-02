@@ -382,6 +382,7 @@ if __name__ == '__main__':
         if args.rank == 0:
             wandb.agent(args.wb_sweep_id,
                         function=lambda: main(args),
+                        count=1,
                         entity='flatiron-scipt',
                         project=args.wb_project)
         else:
