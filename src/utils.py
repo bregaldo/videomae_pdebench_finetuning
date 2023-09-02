@@ -14,8 +14,24 @@ import torch
 import torch.distributed as dist
 from torch import inf
 import random
+from argparse import Namespace
 
 from tensorboardX import SummaryWriter
+
+
+def get_base_dir():
+    return '/mnt/home/bregaldosaintblancard/Projects/Foundation Models/VideoMAE_comparison'
+
+def get_ceph_dir():
+    return os.path.join(get_base_dir(), 'ceph')
+
+def get_pdebench_basic_stats(data_name):
+    return json.load(open(os.path.join(get_ceph_dir(), 'pdebench_misc', f'{data_name}_basic_stats.json'), 'r'))
+
+def load_args(f):
+    with open(f, 'r') as fid:
+        args = json.load(fid)
+    return Namespace(**args)
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):

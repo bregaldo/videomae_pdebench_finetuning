@@ -10,11 +10,11 @@ from pathlib import Path
 from timm.models import create_model
 from optim_factory import create_optimizer
 from datasets import build_pdebench_dataset
-from engine_for_pdebench_finetuning import train_one_epoch
+from engine_for_pdebench_finetuning import train_one_epoch, test_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
 import utils
 import wandb
-import modeling_pretrain
+import modeling_pretrain # for VideoMAE models
 
 
 def str2bool(v):
@@ -57,6 +57,11 @@ def get_args(interactive=False):
     # parser.add_argument('--normlize_target', default=True, type=bool,
     #                     help='normalized the target patch pixels')
 
+    # Wandb parameters
+    parser.add_argument('--wb_project', default='videomae_finetunint', type=str)
+    parser.add_argument('--wb_group', default=None, type=str)
+    parser.add_argument('--wb_name', default=None, type=str)
+
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
                         help='Optimizer (default: "adamw"')
@@ -97,6 +102,7 @@ def get_args(interactive=False):
     # Dataset parameters
     parser.add_argument('--data_set', default='compNS_turb', type=str,
                         help='dataset')
+    parser.add_argument('--fields', default=['Vx', 'Vy', 'density'], type=lambda x: x.split(','))
     parser.add_argument('--data_tmp_copy', default=False, type=str2bool)
     parser.add_argument('--imagenet_default_mean_and_std', default=True, action='store_true')
     parser.add_argument('--num_frames', type=int, default= 16)
@@ -169,7 +175,12 @@ def main(args):
 
     if args.rank == 0:
         print(args)
-    wandb.init(project='videomae_finetuning', config=args, mode=None if args.rank == 0  else "disabled")
+    wandb.init(project=args.wb_project,
+               group=args.wb_group,
+               job_type='finetuning',
+               name=args.wb_name,
+               config=args,
+               mode=None if args.rank == 0  else "disabled")
 
     device = torch.device(args.device)
 
@@ -190,8 +201,13 @@ def main(args):
     print("output_dir=", args.output_dir)
     print("log_dir", args.log_dir)
 
-    # get dataset
+    # Save args to output_dir
+    with open(os.path.join(args.output_dir, 'args.json'), 'w') as f:
+        json.dump(dict(args._get_kwargs()), f, indent=4)
+
+    # get datasets
     dataset_train = build_pdebench_dataset(args, 'train')
+    dataset_test = build_pdebench_dataset(args, 'test')
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
@@ -203,7 +219,11 @@ def main(args):
     sampler_train = torch.utils.data.DistributedSampler(
         dataset_train, num_replicas=num_tasks, rank=sampler_rank, shuffle=True
     )
+    sampler_test = torch.utils.data.DistributedSampler(
+        dataset_test, num_replicas=num_tasks, rank=sampler_rank, shuffle=True
+    )
     print("Sampler_train = %s" % str(sampler_train))
+    print("Sampler_test = %s" % str(sampler_test))
 
 
     if global_rank == 0 and args.log_dir is not None:
@@ -214,6 +234,14 @@ def main(args):
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_mem,
+        drop_last=True,
+        worker_init_fn=utils.seed_worker
+    )
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test, sampler=sampler_test,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
@@ -275,6 +303,12 @@ def main(args):
             patch_size=patch_size[0],
             norm_target_mode=args.norm_target_mode,
         )
+        test_stats = test_one_epoch(
+            model, data_loader_test,
+            device, epoch, log_writer=log_writer,
+            patch_size=patch_size[0],
+            norm_target_mode=args.norm_target_mode,
+        )
         if args.output_dir:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 print("Saving model at epoch %d in %s" % (epoch + 1, args.output_dir))
@@ -283,6 +317,7 @@ def main(args):
                     loss_scaler=loss_scaler, epoch=epoch)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                     **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch, 'n_parameters': n_parameters}
         
         wandb.log(log_stats)

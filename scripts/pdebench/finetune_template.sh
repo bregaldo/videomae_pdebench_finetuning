@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=finetuning_videomae_test
+#SBATCH --job-name=ft_test
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks-per-node=1
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=256G
 #SBATCH --partition=gpu
 #SBATCH --constraint=h100
-#SBATCH -o finetuning_test.log
+#SBATCH -o ft_test.log
 
 module --force purge
 source ~/.bashrc
@@ -18,22 +18,30 @@ module load cuda/11.8 cudnn nccl
 module load slurm
 pysource videomae
 
+# Wandb
+wb_project=videomae_finetuning
+wb_group=Calibration
+wb_name=test
+
 # Directories
 BASE_DIR=/mnt/home/bregaldosaintblancard/Projects/Foundation\ Models/VideoMAE_comparison
-OUTPUT_DIR="$BASE_DIR/ceph/pdebench_finetune_template"
+OUTPUT_DIR="$BASE_DIR/ceph/pdebench_finetuning/k400_s/$wb_name/"
 
 # Data
-DATA_SET=compNS_turb # Among: compNS_turb, compNS_rand
+data_set=compNS_turb # Among: compNS_turb, compNS_rand
+fields=Vx,Vy,density
+input_size=224
 num_frames=16
 sampling_rate=1
 data_tmp_copy=False # Set to True if you want to first copy the dataset to /tmp
 
 # Model
-CHECKPOINT=k400_vit-s # Typically among: k400_vit-s, k400_vit-b, ss2_vit-s, ss2_vit-b
-MODEL=pretrain_videomae_small_patch16_224 # Must be consistent with CHECKPOINT
+model_size=small # Among: small, base
+checkpoint=k400_vit-s # Typically among: k400_vit-s, k400_vit-b, ss2_vit-s, ss2_vit-b
+model=pretrain_videomae_${model_size}_patch16_${input_size} # Must be consistent with checkpoint
 
 # Masking
-mask_type=tube # Among: tube, last_frame
+mask_type=last_frame # Among: tube, last_frame
 mask_ratio=0.9 # Only applicable for tube masking
 
 # Normalization
@@ -42,10 +50,10 @@ norm_target_mode=last_frame
 # Optimization
 epoch=100
 warmup_epochs=5
-batch_size=4
+batch_size=4 # Batch size per GPU
 num_workers=4
 opt=adamw
-lr=1e-3
+lr=1e-3 # Base learning rate, effective one is determined through: lr * total_batch_size / 256
 beta1=0.9
 beta2=0.999
 weight_decay=0.05
@@ -60,7 +68,7 @@ cd "$BASE_DIR"
 echo "Finetuning VideoMAE on PDEBENCH dataset"
 echo "Python path: $(which python3)"
 echo "Output dir: $OUTPUT_DIR"
-echo "Finetuning model $CHECKPOINT on $DATA_SET dataset"
+echo "Finetuning model $checkpoint on $data_set dataset"
 
 master_node=$SLURMD_NODENAME
 
@@ -71,12 +79,17 @@ srun python `which torchrun` \
         --rdzv_backend c10d \
         --rdzv_endpoint $master_node:29500 \
         src/run_pdebench_finetuning.py \
-        --data_set $DATA_SET \
+        --wb_project $wb_project \
+        --wb_group $wb_group \
+        --wb_name $wb_name \
+        --data_set $data_set \
+        --fields $fields \
+        --input_size $input_size \
         --data_tmp_copy $data_tmp_copy \
         --mask_type $mask_type \
         --mask_ratio $mask_ratio \
-        --model $MODEL \
-        --checkpoint $CHECKPOINT \
+        --model $model \
+        --checkpoint $checkpoint \
         --lr $lr \
         --batch_size $batch_size \
         --num_workers $num_workers \

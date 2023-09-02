@@ -29,12 +29,10 @@ class CustomNormalize(torch.nn.Module):
 
 class DataAugmentationForPDEBench(object):
     def __init__(self, args):
-        if args.data_set == 'compNS_turb':
-            self.input_min = [-4.0, -4.0, 0.8]
-            self.input_max = [4.0, 4.0, 1.2]
-        elif args.data_set == 'compNS_rand':
-            self.input_min = [-1.2, -1.2, 0.0]
-            self.input_max = [1.2, 1.2, 20.0]
+        if args.data_set in ['compNS_turb', 'compNS_rand']:
+            basic_stats = utils.get_pdebench_basic_stats(args.data_set)
+            self.input_min = [basic_stats[field]['min'] for field in args.fields]
+            self.input_max = [basic_stats[field]['max'] for field in args.fields]
         else:
             raise ValueError('Dataset name not recognized.')
         normalize = CustomNormalize(self.input_min, self.input_max)
@@ -64,6 +62,7 @@ class PDEBenchDataset(Dataset):
                  fields=['Vx', 'Vy', 'density'],
                  timesteps=16,
                  random_start=True,
+                 shuffle=True,
                  set_type='train',
                  split_ratios=(0.8, 0.1, 0.1),
                  split_seed=42,
@@ -75,6 +74,7 @@ class PDEBenchDataset(Dataset):
         assert len(self.fields) > 0, "At least one field must be specified."
 
         self.random_start = random_start
+        self.shuffle = shuffle
 
         self.shape = None
         self.num_samples = None
@@ -139,7 +139,8 @@ class PDEBenchDataset(Dataset):
         self.split_indices = {}
         indices = np.arange(self.num_samples)
         rng = np.random.default_rng(seed=self.split_seed)
-        rng.shuffle(indices)
+        if self.shuffle:
+            rng.shuffle(indices)
         self.split_indices['train'] = indices[:int(self.num_samples*self.split_ratios[0])]
         self.split_indices['val'] = indices[int(self.num_samples*self.split_ratios[0]):int(self.num_samples*(self.split_ratios[0]+self.split_ratios[1]))]
         self.split_indices['test'] = indices[int(self.num_samples*(self.split_ratios[0]+self.split_ratios[1])):]
@@ -157,8 +158,10 @@ class PDEBenchDataset(Dataset):
         sample = torch.zeros((len(self.fields), self.timesteps, *self.sample_shape))
         for i, field in enumerate(self.fields):
             sample[i] = torch.tensor(self.file[field][sample_idx, start_idx:end_idx])
-        processed_sample, mask = self.transform(sample)
-        return processed_sample, mask
+        if self.transform is not None:
+            return self.transform(sample)
+        else:
+            return sample
 
 class DataAugmentationForVideoMAE(object):
     def __init__(self, args):
@@ -192,6 +195,7 @@ class DataAugmentationForVideoMAE(object):
 def build_pdebench_dataset(args, set_type='train'):
     transform = DataAugmentationForPDEBench(args)
     dataset = PDEBenchDataset(args.data_set,
+                              fields=args.fields,
                               set_type=set_type,
                               timesteps=args.num_frames,
                               transform=transform,
