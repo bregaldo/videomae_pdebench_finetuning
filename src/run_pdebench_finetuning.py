@@ -147,6 +147,36 @@ def get_args(interactive=False):
 
     return args
 
+def adapt_checkpoint(checkpoint, model_name):
+    if model_name.find('4chan') >= 0: # Models with 4 input channels instead of 3
+        print("Adapting checkpoint for PDEBench")
+
+        proj_weight = checkpoint['model']['encoder.patch_embed.proj.weight']
+        chans = proj_weight.shape[1]
+        if chans == 3:
+            print("Adapting the size of encoder.patch_embed.proj.weight")
+            # Strategy taken from https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/_manipulate.py#L256
+            proj_weight = proj_weight.repeat(1, 2, 1, 1, 1)[:, :4, :, :, :]
+            proj_weight *= 3 / 4
+            checkpoint['model']['encoder.patch_embed.proj.weight'] = proj_weight
+
+        p0, p1, p2 = 2, 16, 16 # Patch size (always the same for pretrained models)
+        head_weight = checkpoint['model']['decoder.head.weight']
+        if head_weight.shape[0] == p0*p1*p2*3:
+            print("Adapting the size of decoder.head.weight")
+            embed_dim = head_weight.shape[-1]
+            head_weight = head_weight.reshape(p0, p1, p2, 3, embed_dim)
+            head_weight = head_weight.repeat(1, 1, 1, 2, 1)[:, :, :, :4, :]
+            head_weight = head_weight.reshape(-1, embed_dim)
+            checkpoint['model']['decoder.head.weight'] = head_weight
+
+        head_bias = checkpoint['model']['decoder.head.bias']
+        if head_bias.shape[0] == p0*p1*p2*3:
+            print("Adapting the size of decoder.head.bias")
+            head_bias = head_bias.reshape(p0, p1, p2, 3)
+            head_bias = head_bias.repeat(1, 1, 1, 2)[:, :, :, :4]
+            head_bias = head_bias.reshape(-1)
+            checkpoint['model']['decoder.head.bias'] = head_bias
 
 def get_model(args):
     print(f"Creating model: {args.model}")
@@ -171,6 +201,7 @@ def get_model(args):
         else:
             path = os.path.join(base_dir, args.checkpoint + '.pth')
         checkpoint = torch.load(path, map_location='cpu')
+        adapt_checkpoint(checkpoint, args.model)
         utils.load_state_dict(model, checkpoint['model'])
     return model
 

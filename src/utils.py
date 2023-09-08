@@ -8,6 +8,7 @@ import datetime
 import numpy as np
 from timm.utils import get_state_dict
 from torch.utils.data._utils.collate import default_collate
+import torch.nn.functional as F
 from pathlib import Path
 import subprocess
 import torch
@@ -560,3 +561,129 @@ def multiple_samples_collate(batch, fold=False):
         return [inputs], labels, video_idx, extra_data
     else:
         return inputs, labels, video_idx, extra_data
+
+def fouriercov2d(data, data2=None, norm=None, use_gpu = True):
+    """ Compute the power spectrum of the input data or the cross spectrum if data2 is not None. Returns a torch tensor on the device."""
+    temp_device = torch.device('cuda' if use_gpu and torch.cuda.is_available() else 'cpu')
+    with torch.no_grad():
+        if isinstance(data, np.ndarray):
+            data = torch.from_numpy(data).to(temp_device)
+        else:
+            data = data.to(temp_device)
+        if data2 is not None:
+            if isinstance(data2, np.ndarray):
+                data2 = torch.from_numpy(data2).to(temp_device)
+            else:
+                data2 = data2.to(temp_device)
+        if data2 is None:
+            result=torch.absolute(torch.fft.fft2(data, norm=norm))**2
+        else:
+            result=torch.conj(torch.fft.fft2(data, norm=norm))*torch.fft.fft2(data2, norm=norm)
+        return result
+
+def power_spectrum_2d(data, norm=None, use_gpu = True):
+    '''Data is supposed to have shape B x C x H x W.
+    If C = 1, then we compute the power spectrum of each image
+    If C >=1 we compute the power spectrum of each channel & the cross spectrum for every pair of channels.
+    This will lead to a tensor of shape (B x C X C x H x W).
+    One should keep in mind that for i != j the cross spectrum is not symetric but it is conjugate transpose with complex values.
+    '''
+    temp_device = torch.device('cuda' if use_gpu and torch.cuda.is_available() else 'cpu')
+    if data.shape[1]==1:
+        ## We only have to compute the power spectrum of each image
+        return fouriercov2d(data.to(temp_device), norm=norm, use_gpu=use_gpu)
+    else:
+        B, C, H, W = data.shape
+        dims_pair = [(i,j) for i in range(C) for j in range(i+1)]
+        input_tensors1 = []
+        input_tensors2 = []
+        for pair in dims_pair:
+            i , j = pair
+            input_tensors1.append(data[:,i])
+            input_tensors2.append(data[:,j])
+        input_tensors1 = torch.cat(input_tensors1, dim=0).to(temp_device)
+        input_tensors2 = torch.cat(input_tensors2, dim=0).to(temp_device)
+        stacked = fouriercov2d(input_tensors1, data2=input_tensors2, norm=norm, use_gpu=use_gpu)
+        res = torch.zeros((B, C, C, H, W), dtype=torch.complex64, device=temp_device)
+        for idx, pair in enumerate(dims_pair):
+            i , j = pair
+            res[:,i,j] = stacked[idx*B:(idx+1)*B]
+            if i != j:
+                res[:,j,i] = torch.conj(stacked[idx*B:(idx+1)*B])
+        return res
+
+
+def _spectral_iso2d(data_sp, bins=None, sampling=1.0, return_counts=False, use_gpu = True):
+    '''Given a B x C x H x W or a B x C x C x H x W tensor, compute the isotropic power spectrum of each image (only over the B dimension)'''
+    input_dim = data_sp.ndim
+    temp_device = torch.device('cuda' if use_gpu and torch.cuda.is_available() else 'cpu')
+
+    if input_dim == 4:
+        B, C, _, N = data_sp.shape
+        assert C==1, "There was an issue with power_spectrum2d that didn't take into account the channel dimension"
+        ## We only have a power spectrum for each image
+        n_dim = 2
+        wn = (2 * np.pi * torch.fft.fftfreq(N, d=sampling)).reshape((N,) + (1,) * (n_dim - 1)).to(temp_device)
+        wn_iso = torch.zeros(data_sp.shape).to(temp_device)
+        for i in range(n_dim):
+            wn_iso += torch.moveaxis(wn, 0, i) ** 2
+        wn_iso = torch.sqrt(wn_iso).to(temp_device)
+        wn_iso = wn_iso.reshape(B, C, -1).to(temp_device) ## C = 1
+        data_sp = data_sp.reshape(B, C, -1).to(temp_device)
+
+        if bins is None:
+            bins = torch.sort(torch.unique(wn_iso))[0].to(temp_device)
+        BINS = len(bins)
+        index = torch.bucketize(wn_iso, bins).to(temp_device)
+        index_mask = F.one_hot(index, BINS+1).to(temp_device) ## we will discard the first bin
+
+        counts = torch.sum(index_mask, dim=[1, 2])
+        ps_mean = torch.sum(index_mask * data_sp.unsqueeze(-1), dim=[1, 2]) / counts
+
+        ps_std = torch.sqrt(torch.sum(index_mask * (data_sp.unsqueeze(-1) - ps_mean.reshape(B, 1, 1, BINS +1)) ** 2, dim=[1, 2]) / counts)
+
+        ps_mean, ps_std = ps_mean[:,1:], ps_std[:,1:] ## discard the first bin
+        
+        if return_counts:
+            return bins, ps_mean, ps_std, torch.tensor(counts)
+        else:
+            return bins, ps_mean, ps_std ## Bins, Shape B x len(bins) , idem
+    elif input_dim == 5:
+        ## We have a power spectrum for each pairs of channels
+        B, C,_, _, N = data_sp.shape
+        assert data_sp.shape == (B, C, C, N, N) 
+        data_sp = data_sp.real ## Because we integrate over a circle on the fourrier plane, only real part is relevant (imag part cancels out, up to numerical errors)
+        n_dim = 2
+        wn = (2 * np.pi * torch.fft.fftfreq(N, d=sampling)).reshape((N,) + (1,) * (n_dim - 1)).to(temp_device)
+        wn_iso = torch.zeros(data_sp.shape).to(temp_device)
+        for i in range(n_dim):
+            wn_iso += torch.moveaxis(wn, 0, i) ** 2
+        wn_iso = torch.sqrt(wn_iso)
+        wn_iso = wn_iso.reshape(B, C, C, -1)
+        data_sp = data_sp.reshape(B, C, C, -1)
+
+        if bins is None:
+            bins = torch.sort(torch.unique(wn_iso))[0]
+        BINS = len(bins)
+        index = torch.bucketize(wn_iso, bins)
+        index_mask = F.one_hot(index, BINS+1).to(temp_device) ## we will discard the first bin
+        counts = torch.sum(index_mask, dim=3)
+        ps_mean = torch.sum(index_mask * data_sp.unsqueeze(-1), dim=3) / counts
+        temp = (data_sp.unsqueeze(-1) - ps_mean.unsqueeze(3)) ** 2
+        ps_std = torch.sqrt(torch.sum(index_mask * temp, dim=3) / counts)
+
+        ps_mean, ps_std = ps_mean[:,:,:,1:], ps_std[:,:,:,1:] ## discard the first bin
+
+        if return_counts:
+            return bins, ps_mean, ps_std, torch.tensor(counts)
+        else:
+            return bins, ps_mean, ps_std
+    else:
+        raise ValueError("The input tensor should have 4 or 5 dimensions")
+
+
+def power_spectrum_iso2d(data, bins=None, sampling=1.0, norm=None, return_counts=False, use_gpu=True):
+    '''Different behavior depending on the shape of data'''
+    temp_device = torch.device('cuda' if use_gpu and torch.cuda.is_available() else 'cpu')
+    return _spectral_iso2d(power_spectrum_2d(data.to(temp_device), norm=norm, use_gpu = use_gpu), bins=bins.to(temp_device), sampling=sampling, return_counts=return_counts, use_gpu = use_gpu) 
+    ## Bins , Shape B x 1 x len(bins) or B x C x C x len(bins), idem

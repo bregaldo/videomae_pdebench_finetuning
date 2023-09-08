@@ -70,7 +70,15 @@ def unnorm_batch(x, norm_mode='videomae', patch_size=(2, 16, 16), context=None, 
         x_unnorm = x * x_squeeze_std_loc + x_squeeze_mean_loc
         x_unnorm = rearrange(x_unnorm, 'b n p c -> b n (p c)')
     elif norm_mode == 'last_frame':
-        x_unnorm = x
+        B, C = context.shape[0], context.shape[1]
+        context_squeeze = rearrange(context, 'b c (t p0) (h p1) (w p2) -> b t (h w) (p0 p1 p2) c', p0=p0, p1=p1, p2=p2)
+        context_squeeze_mean = context_squeeze[:, :-1].mean(dim=(1, 2, 3), keepdim=True)
+        context_squeeze_std = context_squeeze[:, :-1].var(dim=(1, 2, 3), keepdim=True, unbiased=True).sqrt() + 1e-6
+        context_squeeze_mean = rearrange(context_squeeze_mean, 'b 1 1 1 c -> b 1 1 c')
+        context_squeeze_std = rearrange(context_squeeze_std, 'b 1 1 1 c -> b 1 1 c')
+        x = rearrange(x, 'b n (p c) -> b n p c', c=C)
+        x_unnorm = x * context_squeeze_std + context_squeeze_mean
+        x_unnorm = rearrange(x_unnorm, 'b n p c -> b n (p c)')
     elif norm_mode == 'none':
         x_unnorm = x
     else:
