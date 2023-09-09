@@ -12,7 +12,7 @@ class NMSELoss(nn.MSELoss):
     """ Normalized MSE Loss: L = MSE(input/target_norm, target/target_norm) where target_norm is the l2 norm on spatial dimensions
         This normalization is important when the channels represent different physical quantities (e.g. velocity, pressure, etc.).
     """
-    def __init__(self, reduction='mean', p0=2, p1=16, p2=16, p0_sel=0):
+    def __init__(self, reduction='mean', p0=2, p1=16, p2=16, p0_sel=None):
         super().__init__(reduction=reduction)
         self.eps = 1e-7
         self.p0 = p0 # Number of frames per cube/token
@@ -24,7 +24,7 @@ class NMSELoss(nn.MSELoss):
         # input, target: (Batch, Nb_masked_tokens, Patch) where Patch = p0*p1*p2*c
         input = rearrange(input, 'b n (p0 p1 p2 c) -> b n p0 (p1 p2) c', p0=self.p0, p1=self.p1, p2=self.p2)
         target = rearrange(target, 'b n (p0 p1 p2 c) -> b n p0 (p1 p2) c', p0=self.p0, p1=self.p1, p2=self.p2)
-        target_norm = torch.sqrt((target**2).mean(dim=-2, keepdim=True) + self.eps)
+        target_norm = torch.sqrt((target**2).mean(dim=-2 if self.p0_sel is not None else (-2, -3), keepdim=True) + self.eps)
         if self.p0_sel is not None:
             target_norm = target_norm[:, :, self.p0_sel:self.p0_sel+1]
         return super().forward(input/target_norm, target/target_norm)
@@ -107,7 +107,7 @@ def train_one_epoch(model: torch.nn.Module, data_loader: Iterable, optimizer: to
     p0, p1, p2 = 2, patch_size, patch_size
     
     #loss_func = nn.MSELoss()
-    loss_func = NMSELoss(p0=p0, p1=p1, p2=p2, p0_sel=0)
+    loss_func = NMSELoss(p0=p0, p1=p1, p2=p2, p0_sel=None)
 
     for step, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # assign learning rate & weight decay for each step
@@ -193,7 +193,7 @@ def test_one_epoch(model: torch.nn.Module, data_loader: Iterable,
     p0, p1, p2 = 2, patch_size, patch_size
 
     #loss_func = nn.MSELoss()
-    loss_func = NMSELoss(p0=p0, p1=p1, p2=p2, p0_sel=0)
+    loss_func = NMSELoss(p0=p0, p1=p1, p2=p2, p0_sel=None)
 
     for _, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         videos, bool_masked_pos = batch

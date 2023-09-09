@@ -21,6 +21,8 @@ __all__ = [
     'pretrain_videomae_small_patch16_512',
     'pretrain_videomae_small_patch16_512_4chan',
     'pretrain_videomae_base_patch16_224',
+    'pretrain_videomae_base_patch16_512',
+    'pretrain_videomae_base_patch16_512_4chan',
     'pretrain_videomae_large_patch16_224', 
     'pretrain_videomae_huge_patch16_224',
 ]
@@ -413,6 +415,57 @@ def pretrain_videomae_base_patch16_224(pretrained=False, **kwargs):
         mlp_ratio=4, 
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), 
+        **kwargs)
+    model.default_cfg = _cfg()
+    if pretrained:
+        checkpoint = torch.load(
+            kwargs["init_ckpt"], map_location="cpu"
+        )
+        model.load_state_dict(checkpoint["model"])
+    return model
+
+@register_model
+def pretrain_videomae_base_patch16_512(pretrained=False, **kwargs):
+    model = PretrainVisionTransformer(
+        img_size=512,
+        num_frames=16,
+        patch_size=16,
+        encoder_embed_dim=768,
+        encoder_depth=12,
+        encoder_num_heads=12,
+        encoder_num_classes=0,
+        decoder_num_classes=1536, 
+        decoder_embed_dim=384, 
+        decoder_num_heads=6,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs)
+    model.default_cfg = _cfg()
+    if pretrained:
+        checkpoint = torch.load(
+            kwargs["init_ckpt"], map_location="cpu"
+        )
+        model.load_state_dict(checkpoint["model"])
+    return model
+
+@register_model
+def pretrain_videomae_base_patch16_512_4chan(pretrained=False, **kwargs):
+    model = PretrainVisionTransformer(
+        img_size=512,
+        num_frames=16,
+        patch_size=16,
+        encoder_embed_dim=768,
+        encoder_in_chans=4,
+        encoder_depth=12,
+        encoder_num_heads=12,
+        encoder_num_classes=0,
+        decoder_num_classes=2048, # 4*16*16*2
+        decoder_embed_dim=384, 
+        decoder_num_heads=6,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
         **kwargs)
     model.default_cfg = _cfg()
     if pretrained:

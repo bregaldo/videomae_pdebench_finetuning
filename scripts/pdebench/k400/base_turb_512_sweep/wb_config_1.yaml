@@ -1,0 +1,12 @@
+method: random
+metric:
+  goal: minimize
+  name: test_loss
+name: k400_b_turb_512_1
+parameters:
+  lr:
+    distribution: q_log_uniform_values
+    max: 1e-2
+    min: 1e-4
+    q: 1e-5
+  
