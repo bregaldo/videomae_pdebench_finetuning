@@ -21,8 +21,14 @@ class CustomNormalize(torch.nn.Module):
         self.max = torch.reshape(self.max, (-1,) + (1,) * self.dim_from_the_end)
         self.eps = eps
 
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+    def normalize(self, tensor: torch.Tensor) -> torch.Tensor:
         return (tensor - self.min) / ((self.max - self.min) + self.eps)
+
+    def unnormalize(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor * ((self.max - self.min) + self.eps) + self.min
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self.normalize(tensor)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(min={self.min}, max={self.max})"
@@ -62,7 +68,7 @@ class PDEBenchDataset(Dataset):
                  fields=['Vx', 'Vy', 'density'],
                  timesteps=16,
                  random_start=True,
-                 shuffle=True,
+                 shuffle=False,
                  set_type='train',
                  split_ratios=(0.8, 0.1, 0.1),
                  split_seed=42,
@@ -98,8 +104,10 @@ class PDEBenchDataset(Dataset):
         data_base_path = "/mnt/home/gkrawezik/ceph/AI_DATASETS/PDEBench/2D/CFD/"
         data_rand_path = os.path.join(data_base_path, "2D_Train_Rand")
         data_turb_path = os.path.join(data_base_path, "2D_Train_Turb")
-        data_rand_filename = '2D_CFD_Rand_M0.1_Eta0.1_Zeta0.1_periodic_128_Train.hdf5'
-        data_turb_filename = '2D_CFD_Turb_M0.1_Eta1e-08_Zeta1e-08_periodic_512_Train.hdf5'
+        #data_rand_filename = '2D_CFD_Rand_M0.1_Eta0.1_Zeta0.1_periodic_128_Train.hdf5'
+        data_rand_filename = '2D_CFD_Rand_M0.1_Eta0.01_Zeta0.01_periodic_128_Train.hdf5'
+        #data_turb_filename = '2D_CFD_Turb_M0.1_Eta1e-08_Zeta1e-08_periodic_512_Train.hdf5'
+        data_turb_filename = '2D_CFD_Turb_M1.0_Eta1e-08_Zeta1e-08_periodic_512_Train.hdf5'
 
         if self.dataset_name == 'compNS_turb':
             filename = os.path.join(data_turb_path, data_turb_filename)
@@ -194,8 +202,13 @@ class DataAugmentationForVideoMAE(object):
 
 def build_pdebench_dataset(args, set_type='train'):
     transform = DataAugmentationForPDEBench(args)
+    train_split_ratio = args.train_split_ratio
+    test_split_ratio = args.test_split_ratio
+    assert train_split_ratio + test_split_ratio <= 1.0
+    val_split_ratio = 1.0 - train_split_ratio - test_split_ratio
     dataset = PDEBenchDataset(args.data_set,
                               fields=args.fields,
+                              split_ratios=(train_split_ratio, val_split_ratio, test_split_ratio),
                               set_type=set_type,
                               timesteps=args.num_frames,
                               transform=transform,
