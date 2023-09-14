@@ -232,7 +232,9 @@ def main(args):
 
         # We update the wandb run name
         run_name = args.wb_name \
-                 + f'_lr_{args.lr:.6f}'
+                 + f'_lr_{args.lr:.6f}' \
+                 + f'_lrd_{args.layer_decay:.2f}' \
+                 + f'_ep_{args.epochs}'
         wandb.run.name = run_name
         if args.output_dir:
             args.output_dir = os.path.join(args.output_dir, run_name)

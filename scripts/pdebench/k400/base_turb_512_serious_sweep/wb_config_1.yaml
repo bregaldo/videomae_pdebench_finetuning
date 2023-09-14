@@ -1,0 +1,18 @@
+method: random
+metric:
+  goal: minimize
+  name: test_loss
+name: k400_b_turb_512_serious_1
+parameters:
+  lr:
+    distribution: q_log_uniform_values
+    max: 1e-1
+    min: 1e-3
+    q: 1e-4
+  epochs:
+    values:
+     - 50
+  layer_decay:
+    values:
+     - 0.75
+     - 1.0
