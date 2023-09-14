@@ -116,6 +116,7 @@ class PDEBenchDataset(Dataset):
             filename = os.path.join(data_rand_path, data_rand_filename)
         else:
             raise ValueError('Dataset name not recognized.')
+        print("Loading dataset file %s" % filename)
         if self.data_tmp_copy:
             if self.local_rank == 0:
                 stime = time.time()
