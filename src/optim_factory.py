@@ -34,6 +34,26 @@ def get_num_layer_for_vit(var_name, num_max_layer):
     else:
         return num_max_layer - 1
 
+def get_num_layer_for_autoencoder_vit(var_name, num_max_layer, enc_num_layers, dec_num_layers):
+    if var_name in ("cls_token", "mask_token", "pos_embed"):
+        return 0
+    elif var_name.startswith("encoder.patch_embed"):
+        return 0
+    elif var_name.startswith("rel_pos_bias"):
+        return num_max_layer - 1
+    elif var_name.startswith("encoder.blocks"):
+        layer_id = int(var_name.split('.')[2])
+        return layer_id + 1
+    elif var_name.startswith("encoder.norm"):
+        return enc_num_layers
+    elif var_name.startswith("decoder.blocks"):
+        layer_id = int(var_name.split('.')[2])
+        return enc_num_layers + layer_id + 1
+    elif var_name.startswith("encoder_to_decoder"):
+        return enc_num_layers 
+    else:
+        return num_max_layer - 1
+
 
 class LayerDecayValueAssigner(object):
     def __init__(self, values):
@@ -44,6 +64,18 @@ class LayerDecayValueAssigner(object):
 
     def get_layer_id(self, var_name):
         return get_num_layer_for_vit(var_name, len(self.values))
+
+class LayerDecayAutoencValueAssigner(object):
+    def __init__(self, values, enc_num_layers, dec_num_layers):
+        self.enc_num_layers = enc_num_layers
+        self.dec_num_layers = dec_num_layers
+        self.values = values
+
+    def get_scale(self, layer_id):
+        return self.values[layer_id]
+
+    def get_layer_id(self, var_name):
+        return get_num_layer_for_autoencoder_vit(var_name, len(self.values), self.enc_num_layers, self.dec_num_layers)
 
 
 def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=None, get_layer_scale=None):

@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 from timm.models import create_model
-from optim_factory import create_optimizer
+from optim_factory import create_optimizer, LayerDecayAutoencValueAssigner
 from datasets import build_pdebench_dataset
 from engine_for_pdebench_finetuning import train_one_epoch, test_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
@@ -51,7 +51,7 @@ def get_args(interactive=False):
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size for backbone')
 
-    parser.add_argument('--drop_path', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--drop_path', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
     
     parser.add_argument('--norm_target_mode', default='videomae')
@@ -59,7 +59,7 @@ def get_args(interactive=False):
     #                     help='normalized the target patch pixels')
 
     # Wandb parameters
-    parser.add_argument('--wb_project', default='videomae_finetunint', type=str)
+    parser.add_argument('--wb_project', default='videomae_finetuning', type=str)
     parser.add_argument('--wb_group', default=None, type=str)
     parser.add_argument('--wb_name', default=None, type=str)
     parser.add_argument('--wb_sweep_id', default=None, type=str)
@@ -83,6 +83,7 @@ def get_args(interactive=False):
 
     parser.add_argument('--lr', type=float, default=1.5e-4, metavar='LR',
                         help='learning rate (default: 1.5e-4)')
+    parser.add_argument('--layer_decay', type=float, default=0.75)
     parser.add_argument('--warmup_lr', type=float, default=1e-6, metavar='LR',
                         help='warmup learning rate (default: 1e-6)')
     parser.add_argument('--min_lr', type=float, default=1e-5, metavar='LR',
@@ -105,6 +106,8 @@ def get_args(interactive=False):
     parser.add_argument('--data_set', default='compNS_turb', type=str,
                         help='dataset')
     parser.add_argument('--fields', default=['Vx', 'Vy', 'density'], type=lambda x: x.split(','))
+    parser.add_argument('--train_split_ratio', default=0.8, type=float)
+    parser.add_argument('--test_split_ratio', default=0.1, type=float)
     parser.add_argument('--data_tmp_copy', default=False, type=str2bool)
     parser.add_argument('--imagenet_default_mean_and_std', default=True, action='store_true')
     parser.add_argument('--num_frames', type=int, default= 16)
@@ -327,12 +330,29 @@ def main(args):
     print("Number of training steps = %d" % num_training_steps_per_epoch)
     print("Number of training examples per epoch = %d" % (total_batch_size * num_training_steps_per_epoch))
 
+
+    num_layers = model_without_ddp.get_num_layers()
+    if args.layer_decay < 1.0:
+        assigner = LayerDecayAutoencValueAssigner(list(args.layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)),
+                                                  enc_num_layers=model_without_ddp.encoder.get_num_layers(),
+                                                  dec_num_layers=model_without_ddp.decoder.get_num_layers())
+    else:
+        assigner = None
+
+    if assigner is not None:
+        print("Assigned values = %s" % str(assigner.values))
+    
+    skip_weight_decay_list = model.no_weight_decay()
+    print("Skip weight decay list: ", skip_weight_decay_list)
+
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=False)
         model_without_ddp = model.module
 
     optimizer = create_optimizer(
-        args, model_without_ddp)
+            args, model_without_ddp, skip_list=skip_weight_decay_list,
+            get_num_layer=assigner.get_layer_id if assigner is not None else None, 
+            get_layer_scale=assigner.get_scale if assigner is not None else None)
     loss_scaler = NativeScaler()
 
     print("Use step level LR & WD scheduler!")
