@@ -23,6 +23,7 @@ __all__ = [
     'pretrain_videomae_base_patch16_224',
     'pretrain_videomae_base_patch16_512',
     'pretrain_videomae_base_patch16_512_4chan',
+    'pretrain_videomae_base_patch16_512_4chan_18f',
     'pretrain_videomae_large_patch16_224', 
     'pretrain_videomae_huge_patch16_224',
 ]
@@ -270,24 +271,27 @@ class PretrainVisionTransformer(nn.Module):
 
         # height (== width) for the new position embedding
         new_spatial_patches_size = int((num_patches // (num_frames // tubelet_size))** 0.5)
+        new_temporal_patches_size = num_frames // tubelet_size
 
         pos_embed = get_sinusoid_encoding_table(orig_num_patches, embed_dim)
 
-        if orig_spatial_patches_size != new_spatial_patches_size:
-            print("Position interpolate from %dx%d to %dx%d" % (orig_spatial_patches_size,
-                                                                orig_spatial_patches_size,
-                                                                new_spatial_patches_size,
-                                                                new_spatial_patches_size))
-            # B, L, C -> BT, H, W, C -> BT, C, H, W
-            pos_embed = pos_embed.reshape(-1, num_frames // tubelet_size, orig_spatial_patches_size, orig_spatial_patches_size, embed_dim)
-            pos_embed = pos_embed.reshape(-1, orig_spatial_patches_size, orig_spatial_patches_size, embed_dim).permute(0, 3, 1, 2)
+        if orig_spatial_patches_size != new_spatial_patches_size or orig_temporal_patches_size != new_temporal_patches_size:
+            print("Position interpolate from %dx%dx%d to %dx%dx%d" % (orig_temporal_patches_size,
+                                                                      orig_spatial_patches_size,
+                                                                      orig_spatial_patches_size,
+                                                                      new_temporal_patches_size,
+                                                                      new_spatial_patches_size,
+                                                                      new_spatial_patches_size))
+            # B, L, C -> B, T, H, W, C -> B, C, T, H, W
+            pos_embed = pos_embed.reshape(-1, orig_temporal_patches_size, orig_spatial_patches_size, orig_spatial_patches_size, embed_dim)
+            pos_embed = pos_embed.permute(0, 4, 1, 2, 3)
             pos_embed = torch.nn.functional.interpolate(
-                pos_embed, size=(new_spatial_patches_size, new_spatial_patches_size), mode='bicubic', align_corners=False)
+                pos_embed, size=(new_temporal_patches_size, new_spatial_patches_size, new_spatial_patches_size), mode='trilinear', align_corners=False)
             # BT, C, H, W -> BT, H, W, C ->  B, T, H, W, C
-            pos_embed = pos_embed.permute(0, 2, 3, 1).reshape(-1, num_frames // tubelet_size,
-                                                              new_spatial_patches_size,
-                                                              new_spatial_patches_size,
-                                                              embed_dim) 
+            pos_embed = pos_embed.permute(0, 2, 3, 4, 1).reshape(-1, new_temporal_patches_size,
+                                                                    new_spatial_patches_size,
+                                                                    new_spatial_patches_size,
+                                                                    embed_dim) 
             pos_embed = pos_embed.flatten(1, 3) # B, L, C
         return pos_embed
 
@@ -301,7 +305,7 @@ class PretrainVisionTransformer(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def get_num_layers(self):
-        return len(self.blocks)
+        return self.encoder.get_num_layers() + self.decoder.get_num_layers()
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -454,6 +458,32 @@ def pretrain_videomae_base_patch16_512_4chan(pretrained=False, **kwargs):
     model = PretrainVisionTransformer(
         img_size=512,
         num_frames=16,
+        patch_size=16,
+        encoder_embed_dim=768,
+        encoder_in_chans=4,
+        encoder_depth=12,
+        encoder_num_heads=12,
+        encoder_num_classes=0,
+        decoder_num_classes=2048, # 4*16*16*2
+        decoder_embed_dim=384, 
+        decoder_num_heads=6,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs)
+    model.default_cfg = _cfg()
+    if pretrained:
+        checkpoint = torch.load(
+            kwargs["init_ckpt"], map_location="cpu"
+        )
+        model.load_state_dict(checkpoint["model"])
+    return model
+
+@register_model
+def pretrain_videomae_base_patch16_512_4chan_18f(pretrained=False, **kwargs):
+    model = PretrainVisionTransformer(
+        img_size=512,
+        num_frames=18,
         patch_size=16,
         encoder_embed_dim=768,
         encoder_in_chans=4,
