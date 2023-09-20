@@ -32,6 +32,7 @@ def get_args(interactive=False):
     parser = argparse.ArgumentParser('VideoMAE finetuning PDEBench script', add_help=False)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--epochs', default=100, type=int)
+    parser.add_argument('--epochs_scheduler', default=None, type=int)
     parser.add_argument('--save_ckpt_freq', default=50, type=int)
 
     # Model parameters
@@ -147,6 +148,8 @@ def get_args(interactive=False):
 
     if args.wb_sweep_id is None:
         args.wb_sweep_id = ''
+    if args.epochs_scheduler is None:
+        args.epochs_scheduler = args.epochs
 
     return args
 
@@ -282,7 +285,7 @@ def main(args):
     sampler_rank = global_rank
 
     total_batch_size = args.batch_size * num_tasks
-    num_training_steps_per_epoch = len(dataset_train) // total_batch_size
+    num_training_steps_per_epoch = int(np.ceil(len(dataset_train) / total_batch_size))
 
     sampler_train = torch.utils.data.DistributedSampler(
         dataset_train, num_replicas=num_tasks, rank=sampler_rank, shuffle=True
@@ -359,13 +362,13 @@ def main(args):
 
     print("Use step level LR & WD scheduler!")
     lr_schedule_values = utils.cosine_scheduler(
-        args.lr, args.min_lr, args.epochs, num_training_steps_per_epoch,
+        args.lr, args.min_lr, args.epochs_scheduler, num_training_steps_per_epoch,
         warmup_epochs=args.warmup_epochs, warmup_steps=args.warmup_steps,
     )
     if args.weight_decay_end is None:
         args.weight_decay_end = args.weight_decay
     wd_schedule_values = utils.cosine_scheduler(
-        args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
+        args.weight_decay, args.weight_decay_end, args.epochs_scheduler, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
     utils.auto_load_model(
