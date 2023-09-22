@@ -201,7 +201,7 @@ class DataAugmentationForVideoMAE(object):
         return repr
 
 
-def build_pdebench_dataset(args, set_type='train'):
+def build_pdebench_dataset(args, set_type='train', random_start=True, shuffle=False):
     transform = DataAugmentationForPDEBench(args)
     train_split_ratio = args.train_split_ratio
     test_split_ratio = args.test_split_ratio
@@ -214,7 +214,9 @@ def build_pdebench_dataset(args, set_type='train'):
                               timesteps=args.num_frames,
                               transform=transform,
                               data_tmp_copy=args.data_tmp_copy,
-                              local_rank=args.gpu)
+                              local_rank=args.gpu,
+                              random_start=random_start,
+                              shuffle=shuffle)
     return dataset
 
 def build_pretraining_dataset(args):
