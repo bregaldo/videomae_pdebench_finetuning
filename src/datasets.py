@@ -9,6 +9,7 @@ import h5py
 import shutil
 import utils
 import time
+import math
 
 
 class CustomNormalize(torch.nn.Module):
@@ -95,7 +96,7 @@ class PDEBenchDataset(Dataset):
         self.set_type = set_type
         self.split_ratios = split_ratios
         assert len(split_ratios) == 3, "Split ratios must be a tuple of length 3."
-        assert sum(split_ratios) == 1.0, "Split ratios must sum to 1.0."
+        assert math.isclose(sum(split_ratios), 1.0), f"Split ratios must sum to 1.0. ({split_ratios})"
         self.split_seed = split_seed
 
         self.load_dataset()
